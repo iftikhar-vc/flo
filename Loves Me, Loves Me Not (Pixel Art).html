@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Loves me, loves me not - Pixel Art</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #05071c;
+      color: #e2e8f0;
+      font-family: 'Press Start 2P', monospace;
+      overflow: hidden;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Memastikan piksel tajam tanpa blur saat di-upscale */
+    canvas {
+      image-rendering: -moz-crisp-edges;
+      image-rendering: -webkit-crisp-edges;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), 0 0 0 3px #1e2456;
+      border-radius: 12px;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .pixel-btn {
+      font-family: 'Press Start 2P', monospace;
+      transition: transform 0.08s ease, background-color 0.15s ease;
+      box-shadow: 0 4px 0 #15193b;
+    }
+    .pixel-btn:active {
+      transform: translateY(3px);
+      box-shadow: 0 1px 0 #15193b;
+    }
+  </style>
+</head>
+<body class="p-3 sm:p-5">
+
+  <!-- Container Utama -->
+  <div class="flex flex-col items-center justify-center w-full h-full max-w-md gap-3">
+    
+    <!-- Pembungkus Canvas dengan Rasio 3:4 (180x240) -->
+    <div id="canvas-wrapper" class="flex-1 flex items-center justify-center w-full min-h-0">
+      <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <!-- Kontrol Bawah untuk Mobile & Desktop -->
+    <div class="flex items-center justify-center gap-3 w-full pt-1 pb-2">
+      <button id="pluckBtn" class="pixel-btn bg-[#252d6b] hover:bg-[#313c8a] text-[#ff8fc0] border-2 border-[#4755b8] text-[10px] sm:text-xs px-4 py-3 rounded-xl flex items-center gap-2">
+        <span>🌸</span> PETIK
+      </button>
+      <button id="restartBtn" class="pixel-btn bg-[#1c2352] hover:bg-[#27316e] text-[#c0e024] border-2 border-[#394596] text-[10px] sm:text-xs px-4 py-3 rounded-xl flex items-center gap-2">
+        <span>↻</span> ULANG (R)
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    /**
+     * Loves me, loves me not - Pixel Art Simulation
+     * Replikasi akurat dari skrip Pygame (Resolusi internal: 180 x 240)
+     */
+
+    const W = 180;
+    const H = 240;
+    const N_PETALS = 12;
+    const CX = 90;
+    const CY = 108;
+    const STEM_BOTTOM = { x: 90, y: 208 };
+
+    const LOVES_COLOR = "#ff8fc0";
+    const NOT_COLOR   = "#a9bcff";
+    const IDLE_COLOR  = "#c0e024";
+
+    // Matriks Bayer 4x4 untuk ordered dithering
+    const BAYER = [
+      [0,  8,  2, 10],
+      [12, 4, 14,  6],
+      [3, 11,  1,  9],
+      [15, 7, 13,  5]
+    ];
+
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const wrapper = document.getElementById("canvas-wrapper");
+
+    const buf = document.createElement("canvas");
+    buf.width = W;
+    buf.height = H;
+    const bctx = buf.getContext("2d");
+
+    const bgCanvas = document.createElement("canvas");
+    bgCanvas.width = W;
+    bgCanvas.height = H;
+    const bgCtx = bgCanvas.getContext("2d");
+
+    // PRNG sederhana dengan seed=4 agar posisi bintang & rumput identik
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+
+    function lerpColor(a, b, t) {
+      return [
+        Math.floor(a[0] + (b[0] - a[0]) * t),
+        Math.floor(a[1] + (b[1] - a[1]) * t),
+        Math.floor(a[2] + (b[2] - a[2]) * t)
+      ];
+    }
+
+    // Membangun latar belakang Bayer Dithering + Bukit + Tanah
+    function makeBackground() {
+      const imgData = bgCtx.createImageData(W, H);
+      const data = imgData.data;
+      const top = [8, 12, 58];
+      const bottom = [110, 70, 150];
+      const bands = 7;
+
+      for (let y = 0; y < H; y++) {
+        const t = Math.min(1.0, y / (H * 0.8));
+        const v = t * bands;
+        const i = Math.floor(v);
+        const frac = v - i;
+        for (let x = 0; x < W; x++) {
+          const k = i + (frac > BAYER[y % 4][x % 4] / 16 ? 1 : 0);
+          const col = lerpColor(top, bottom, Math.min(k, bands) / bands);
+          const idx = (y * W + x) * 4;
+          data[idx] = col[0];
+          data[idx + 1] = col[1];
+          data[idx + 2] = col[2];
+          data[idx + 3] = 255;
+        }
+      }
+      bgCtx.putImageData(imgData, 0, 0);
+
+      for (let x = 0; x < W; x++) {
+        const y1 = Math.floor(172 + 9 * Math.sin(x * 0.035) + 5 * Math.sin(x * 0.09 + 1));
+        bgCtx.fillStyle = "rgb(28, 38, 110)";
+        bgCtx.fillRect(x, y1, 1, H - y1);
+
+        const y2 = Math.floor(190 + 4 * Math.sin(x * 0.06 + 2));
+        bgCtx.fillStyle = "rgb(20, 70, 50)";
+        bgCtx.fillRect(x, y2, 1, H - y2);
+      }
+
+      bgCtx.fillStyle = "rgb(30, 90, 40)";
+      bgCtx.fillRect(0, 200, W, H - 200);
+    }
+
+    makeBackground();
+
+    const rand = mulberry32(4);
+    const STARS = [];
+    for (let i = 0; i < 45; i++) {
+      STARS.push({
+        x: Math.floor(rand() * (W - 4)) + 2,
+        y: Math.floor(rand() * 118) + 2,
+        phase: rand() * 6.28
+      });
+    }
+
+    const GRASS_COLORS = ["rgb(60, 150, 60)", "rgb(40, 120, 50)", "rgb(90, 180, 70)"];
+    const GRASS = [];
+    for (let i = 0; i < 85; i++) {
+      GRASS.push({
+        x: Math.floor(rand() * W),
+        y: Math.floor(rand() * (232 - 194)) + 194,
+        h: Math.floor(rand() * 6) + 3,
+        color: GRASS_COLORS[Math.floor(rand() * GRASS_COLORS.length)],
+        lean: (rand() - 0.5) * 2
+      });
+    }
+
+    let petals = [];
+    let fallingPetals = [];
+    let particles = [];
+    let currentState = "IDLE";
+    let startsWithLoves = true;
+    let pluckedCount = 0;
+    let flowerRecoil = 0;
+    let time = 0;
+
+    // Efek suara 8-bit sederhana
+    let audioCtx = null;
+    function playPluckSound(isLoves, isFinal) {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === "suspended") audioCtx.resume();
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = isFinal ? "triangle" : "sine";
+
+        const now = audioCtx.currentTime;
+        if (isFinal) {
+          const notes = isLoves ? [523.25, 659.25, 783.99, 1046.5] : [392.00, 349.23, 311.13, 261.63];
+          notes.forEach((freq, idx) => {
+            osc.frequency.setValueAtTime(freq, now + idx * 0.09);
+          });
+          gain.gain.setValueAtTime(0.08, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(now);
+          osc.stop(now + 0.45);
+        } else {
+          const baseFreq = isLoves ? 520 : 410;
+          osc.frequency.setValueAtTime(baseFreq, now);
+          osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.25, now + 0.07);
+          gain.gain.setValueAtTime(0.06, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(now);
+          osc.stop(now + 0.09);
+        }
+      } catch (e) {}
+    }
+
+    function resetGame() {
+      petals = [];
+      fallingPetals = [];
+      particles = [];
+      currentState = "IDLE";
+      pluckedCount = 0;
+      flowerRecoil = 0;
+      startsWithLoves = Math.random() < 0.5;
+
+      for (let i = 0; i < N_PETALS; i++) {
+        const angle = (i / N_PETALS) * Math.PI * 2 - Math.PI / 2;
+        petals.push({
+          index: i,
+          angle: angle,
+          attached: true,
+          wobbleOffset: Math.random() * Math.PI * 2
+        });
+      }
+    }
+
+    function pluckPetal() {
+      const attachedPetals = petals.filter(p => p.attached);
+      if (attachedPetals.length === 0) {
+        resetGame();
+        return;
+      }
+
+      const target = attachedPetals[0];
+      target.attached = false;
+      pluckedCount++;
+      flowerRecoil = 1.0;
+
+      const isLovesTurn = (pluckedCount % 2 === 1) ? startsWithLoves : !startsWithLoves;
+      currentState = isLovesTurn ? "LOVES" : "NOT";
+
+      const isFinal = (attachedPetals.length === 1);
+      playPluckSound(isLovesTurn, isFinal);
+
+      const dist = 17;
+      fallingPetals.push({
+        x: CX + Math.cos(target.angle) * dist,
+        y: CY + Math.sin(target.angle) * dist,
+        angle: target.angle,
+        vx: Math.cos(target.angle) * 0.45 + (Math.random() - 0.5) * 0.3,
+        vy: -0.35 + Math.sin(target.angle) * 0.2,
+        rotSpeed: (Math.random() - 0.5) * 0.08,
+        swayPhase: Math.random() * Math.PI * 2,
+        alpha: 1.0
+      });
+
+      if (isFinal) {
+        spawnEndParticles(isLovesTurn);
+      }
+    }
+
+    function spawnEndParticles(isLoves) {
+      const count = isLoves ? 26 : 30;
+      for (let i = 0; i < count; i++) {
+        if (isLoves) {
+          particles.push({
+            type: "heart",
+            x: CX + (Math.random() - 0.5) * 70,
+            y: CY + (Math.random() - 0.5) * 50,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: -0.4 - Math.random() * 0.6,
+            life: 1.0,
+            decay: 0.006 + Math.random() * 0.006,
+            color: Math.random() < 0.6 ? LOVES_COLOR : "#ffe680"
+          });
+        } else {
+          particles.push({
+            type: "rain",
+            x: Math.random() * W,
+            y: Math.random() * 140,
+            vx: -0.3,
+            vy: 1.4 + Math.random() * 0.8,
+            life: 1.0,
+            decay: 0.008,
+            color: NOT_COLOR
+          });
+        }
+      }
+    }
+
+    function drawPixelPetal(context, x, y, angle, scale = 1.0) {
+      context.save();
+      context.translate(Math.round(x), Math.round(y));
+      context.rotate(angle);
+      context.scale(scale, scale);
+
+      context.fillStyle = "#c8cee8";
+      context.fillRect(-3, -3, 18, 6);
+      context.fillRect(14, -2, 3, 4);
+
+      context.fillStyle = "#fffdf7";
+      context.fillRect(-2, -2, 16, 4);
+      context.fillRect(13, -1, 3, 2);
+
+      context.fillStyle = "#fce79c";
+      context.fillRect(-2, -1, 4, 2);
+
+      context.restore();
+    }
+
+    function drawFlower(swayX) {
+      const headX = CX + swayX;
+      const headY = CY + Math.sin(flowerRecoil * Math.PI) * 2;
+
+      for (let y = headY + 6; y <= STEM_BOTTOM.y; y++) {
+        const progress = 1 - (y - headY) / (STEM_BOTTOM.y - headY);
+        const sx = Math.round(STEM_BOTTOM.x + (headX - STEM_BOTTOM.x) * Math.pow(progress, 1.3));
+        bctx.fillStyle = "#1b5928";
+        bctx.fillRect(sx - 2, y, 4, 1);
+        bctx.fillStyle = "#3ba649";
+        bctx.fillRect(sx - 1, y, 2, 1);
+      }
+
+      const drawLeaf = (lx, ly, dir) => {
+        bctx.fillStyle = "#1b5928";
+        bctx.fillRect(lx, ly - 1, dir * 11, 5);
+        bctx.fillStyle = "#3ba649";
+        bctx.fillRect(lx + dir, ly, dir * 9, 3);
+        bctx.fillStyle = "#62cc68";
+        bctx.fillRect(lx + dir * 2, ly, dir * 6, 1);
+      };
+      drawLeaf(Math.round(CX + swayX * 0.45) - 1, 156, -1);
+      drawLeaf(Math.round(CX + swayX * 0.3) + 1, 174, 1);
+
+      petals.forEach((p) => {
+        if (!p.attached) return;
+        const wobble = Math.sin(time * 2.5 + p.wobbleOffset) * 0.03 + flowerRecoil * 0.08 * Math.sin(p.index * 2);
+        const a = p.angle + wobble;
+        const px = headX + Math.cos(a) * 8;
+        const py = headY + Math.sin(a) * 8;
+        drawPixelPetal(bctx, px, py, a);
+      });
+
+      const hx = Math.round(headX);
+      const hy = Math.round(headY);
+
+      bctx.fillStyle = "#b5651d";
+      bctx.fillRect(hx - 7, hy - 9, 14, 18);
+      bctx.fillRect(hx - 9, hy - 7, 18, 14);
+
+      bctx.fillStyle = "#f5b82e";
+      bctx.fillRect(hx - 6, hy - 8, 12, 16);
+      bctx.fillRect(hx - 8, hy - 6, 16, 12);
+
+      bctx.fillStyle = "#ffe66d";
+      bctx.fillRect(hx - 5, hy - 6, 8, 8);
+      bctx.fillStyle = "#d4841c";
+      bctx.fillRect(hx - 3, hy - 2, 2, 2);
+      bctx.fillRect(hx + 2, hy + 1, 2, 2);
+      bctx.fillRect(hx - 1, hy + 3, 2, 2);
+    }
+
+    function drawPixelText(text, x, y, color, size = 10) {
+      bctx.font = `bold ${size}px "Press Start 2P", monospace`;
+      bctx.textAlign = "center";
+      bctx.textBaseline = "middle";
+
+      bctx.fillStyle = "#080a26";
+      bctx.fillText(text, Math.round(x) + 1, Math.round(y) + 1);
+      bctx.fillText(text, Math.round(x) - 1, Math.round(y) + 1);
+
+      bctx.fillStyle = color;
+      bctx.fillText(text, Math.round(x), Math.round(y));
+    }
+
+    function updateAndRender() {
+      time += 0.03;
+      if (flowerRecoil > 0) {
+        flowerRecoil = Math.max(0, flowerRecoil - 0.08);
+      }
+
+      bctx.drawImage(bgCanvas, 0, 0);
+
+      STARS.forEach((s) => {
+        const twinkle = Math.sin(time * 2.2 + s.phase);
+        if (twinkle > -0.3) {
+          bctx.fillStyle = twinkle > 0.5 ? "#ffffff" : "#9aa5e8";
+          bctx.fillRect(s.x, s.y, 1, 1);
+          if (twinkle > 0.85) {
+            bctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+            bctx.fillRect(s.x - 1, s.y, 3, 1);
+            bctx.fillRect(s.x, s.y - 1, 1, 3);
+          }
+        }
+      });
+
+      const windSway = Math.sin(time * 1.4) * 1.6;
+      drawFlower(windSway);
+
+      for (let i = fallingPetals.length - 1; i >= 0; i--) {
+        const fp = fallingPetals[i];
+        fp.swayPhase += 0.08;
+        fp.vy = Math.min(fp.vy + 0.025, 0.95);
+        fp.x += fp.vx + Math.sin(fp.swayPhase) * 0.45;
+        fp.y += fp.vy;
+        fp.angle += fp.rotSpeed + Math.cos(fp.swayPhase) * 0.02;
+
+        if (fp.y > 218) {
+          fp.alpha -= 0.03;
+          fp.vy = 0;
+          fp.vx = 0;
+        }
+
+        if (fp.alpha <= 0) {
+          fallingPetals.splice(i, 1);
+          continue;
+        }
+
+        bctx.save();
+        bctx.globalAlpha = Math.max(0, fp.alpha);
+        drawPixelPetal(bctx, fp.x, fp.y, fp.angle, 0.95);
+        bctx.restore();
+      }
+
+      GRASS.forEach((g) => {
+        const grassSway = Math.round(Math.sin(time * 2 + g.x * 0.1) * 0.8);
+        bctx.fillStyle = g.color;
+        for (let h = 0; h < g.h; h++) {
+          const offset = Math.round((h / g.h) * (g.lean + grassSway));
+          bctx.fillRect(g.x + offset, g.y - h, 1, 1);
+        }
+      });
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const pt = particles[i];
+        pt.x += pt.vx;
+        pt.y += pt.vy;
+        pt.life -= pt.decay;
+
+        if (pt.life <= 0 || pt.y > H) {
+          if (pluckedCount === N_PETALS) {
+            pt.y = pt.type === "heart" ? CY + 20 : 10;
+            pt.x = pt.type === "heart" ? CX + (Math.random() - 0.5) * 80 : Math.random() * W;
+            pt.life = 1.0;
+          } else {
+            particles.splice(i, 1);
+            continue;
+          }
+        }
+
+        bctx.save();
+        bctx.globalAlpha = Math.max(0, pt.life);
+        bctx.fillStyle = pt.color;
+        if (pt.type === "heart") {
+          const hx = Math.round(pt.x);
+          const hy = Math.round(pt.y);
+          bctx.fillRect(hx - 2, hy - 1, 2, 2);
+          bctx.fillRect(hx + 1, hy - 1, 2, 2);
+          bctx.fillRect(hx - 1, hy, 3, 2);
+          bctx.fillRect(hx, hy + 2, 1, 1);
+        } else {
+          bctx.fillRect(Math.round(pt.x), Math.round(pt.y), 1, 3);
+        }
+        bctx.restore();
+      }
+
+      const isFinished = (pluckedCount === N_PETALS);
+      const textY = isFinished ? 34 + Math.sin(time * 4) * 2 : 34;
+
+      if (currentState === "IDLE") {
+        drawPixelText("Loves me,", W / 2, 24, IDLE_COLOR, 9);
+        drawPixelText("loves me not?", W / 2, 38, IDLE_COLOR, 9);
+        if (Math.sin(time * 3.5) > -0.2) {
+          drawPixelText("TAP / SPACE", W / 2, 216, "#ffffff", 7);
+        }
+      } else if (currentState === "LOVES") {
+        drawPixelText(isFinished ? "LOVES ME!" : "Loves me", W / 2, textY, LOVES_COLOR, isFinished ? 11 : 10);
+      } else {
+        drawPixelText(isFinished ? "LOVES ME NOT..." : "Loves me not", W / 2, textY, NOT_COLOR, isFinished ? 9 : 9);
+      }
+
+      if (isFinished) {
+        if (Math.sin(time * 3.5) > -0.2) {
+          drawPixelText("TAP / R : AGAIN", W / 2, 216, IDLE_COLOR, 7);
+        }
+      } else if (pluckedCount > 0) {
+        drawPixelText(`${N_PETALS - pluckedCount}/${N_PETALS}`, W / 2, 216, "#8a94c7", 7);
+      }
+
+      // Watermark Pixel Art "loves tiar" + ikon hati mini di bawah kanvas
+      bctx.save();
+      bctx.globalAlpha = 0.9;
+      drawPixelText("loves tiar", W / 2 - 4, 233, "#ffd1e6", 5);
+      const wx = Math.round(W / 2 + 27);
+      const wy = 232;
+      bctx.fillStyle = "#080a26";
+      bctx.fillRect(wx - 1, wy, 5, 3);
+      bctx.fillStyle = LOVES_COLOR;
+      bctx.fillRect(wx - 2, wy - 1, 2, 2);
+      bctx.fillRect(wx + 1, wy - 1, 2, 2);
+      bctx.fillRect(wx - 1, wy, 3, 2);
+      bctx.fillRect(wx, wy + 2, 1, 1);
+      bctx.restore();
+
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(buf, 0, 0, canvas.width, canvas.height);
+
+      requestAnimationFrame(updateAndRender);
+    }
+
+    // Responsif: Sesuaikan ukuran tampilan canvas agar menjaga rasio 180:240
+    function resizeCanvas() {
+      const availW = wrapper.clientWidth || window.innerWidth * 0.85;
+      const availH = wrapper.clientHeight || window.innerHeight * 0.72;
+      const scale = Math.max(1, Math.min(availW / W, availH / H));
+
+      canvas.width = Math.floor(W * scale);
+      canvas.height = Math.floor(H * scale);
+      ctx.imageSmoothingEnabled = false;
+    }
+
+    window.addEventListener("resize", resizeCanvas);
+
+    // Event Interaksi (Klik, Tap, Keyboard)
+    canvas.addEventListener("click", (e) => {
+      e.preventDefault();
+      pluckPetal();
+    });
+
+    document.getElementById("pluckBtn").addEventListener("click", (e) => {
+      e.preventDefault();
+      pluckPetal();
+    });
+
+    document.getElementById("restartBtn").addEventListener("click", (e) => {
+      e.preventDefault();
+      resetGame();
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        pluckPetal();
+      } else if (e.code === "KeyR") {
+        e.preventDefault();
+        resetGame();
+      }
+    });
+
+    // Mulai Aplikasi
+    window.addEventListener("load", () => {
+      resizeCanvas();
+      resetGame();
+      requestAnimationFrame(updateAndRender);
+    });
+
+    // Jalankan segera jika dokumen sudah siap
+    if (document.readyState === "complete" || document.readyState === "interactive") {
+      resizeCanvas();
+      resetGame();
+      requestAnimationFrame(updateAndRender);
+    }
+  </script>
+</body>
+</html>
